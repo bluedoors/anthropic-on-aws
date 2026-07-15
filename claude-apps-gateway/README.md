@@ -199,9 +199,11 @@ Tool/permission policies are defense-in-depth (a patched client can ignore them)
 
 ### 3. Telemetry: per-user usage attribution
 
-**What it does:** The gateway relays OpenTelemetry Protocol (OTLP) metrics to a collector you configure. Each export is stamped with the developer's identity (user ID, email, groups), so you get per-user cost and usage breakdowns with no developer-side configuration.
+**What it does:** The gateway relays OpenTelemetry Protocol (OTLP) metrics to a collector. Each export is stamped with the developer's identity (user ID, email, groups), so you get per-user cost and usage breakdowns with no developer-side configuration.
 
-**How it's configured:**
+**This deployment ships a collector for you.** Both deploy paths (`setup.sh` and the CDK app) stand up an **AWS Distro for OpenTelemetry (ADOT) collector** as a second, small Fargate service and point `telemetry.forward_to` at it (over the ALB's `:4318` HTTPS listener). It converts the OTLP metrics to **CloudWatch** under the `ClaudeGateway` namespace — so per-user usage dashboards work out of the box, metrics-only, with no external system to run. To send to your own OTLP backend (Datadog, Splunk, etc.) instead, repoint `forward_to` at it; to turn telemetry off, drop the block *and* remove the collector service so it isn't running idle. (This collector is not drawn in the architecture diagram above.)
+
+**How it's configured** (the example below points at an external collector; the AWS deployment's stamped `gateway.yaml` points at the in-cluster ADOT collector):
 
 ```yaml
 telemetry:

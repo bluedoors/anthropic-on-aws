@@ -24,6 +24,8 @@ This CDK stack creates all the AWS infrastructure needed to run it:
 | **Security groups** | Network rules: ALB accepts HTTPS (443), ECS accepts traffic from ALB only (8080), RDS accepts traffic from ECS only (5432). |
 | **Route53 A record** | Points your gateway hostname at the ALB so developers can reach it by name. |
 | **CloudWatch log group** | Gateway logs go here. Boot messages, auth events, errors. |
+| **ADOT collector (2nd Fargate service)** | Receives per-user usage telemetry (OTLP) from the gateway and converts it to CloudWatch metrics (namespace `ClaudeGateway`). A *separate* service, not a sidecar — the gateway's SSRF guard blocks the loopback a sidecar would use. See "Telemetry" below. |
+| **ALB `:4318` HTTPS listener** | Second listener on the same ALB, reachable only from the gateway task, that forwards OTLP to the collector. The gateway requires an `https://` telemetry target, so the collector rides the ALB's ACM cert. |
 
 ## How traffic flows
 
@@ -42,6 +44,15 @@ This CDK stack creates all the AWS infrastructure needed to run it:
 3. Gateway validates the token, checks the developer's model access policy
 4. Gateway calls Amazon Bedrock using the ECS task role
 5. Amazon Bedrock streams the response back through the gateway to the developer
+
+**Telemetry (fire-and-forget, alongside every request):**
+
+1. After each request the gateway exports OTLP metrics — stamped with the developer's identity — to `telemetry.forward_to` in `gateway.yaml`
+2. That target is the ALB's `:4318` HTTPS listener, which forwards to the ADOT collector service
+3. The collector converts the metrics to CloudWatch (namespace `ClaudeGateway`) for per-user cost and usage dashboards
+4. This leg is fire-and-forget: if the collector is down, inference is unaffected
+
+> The gateway only forwards telemetry when **both** `telemetry.forward_to` and `listen.public_url` are set. Both deploy paths (`setup.sh` and `deploy.sh`) stamp `gateway.yaml` from [`gateway.yaml.template`](gateway.yaml.template), whose `telemetry:` block points `forward_to` at the collector — so telemetry is on by default and metrics-only (no prompt/tool-input content). To send to your *own* external collector (Datadog, Splunk, etc.) instead, edit that block. To turn telemetry off, delete the block — but then also remove the ADOT collector service from the stack so you're not paying for an idle task.
 
 ## What you need before deploying
 
@@ -474,9 +485,12 @@ This deletes the ECS service, ALB, RDS database, ECR repository, IAM roles, secu
 | Resource | Monthly cost |
 |----------|-------------|
 | ECS Fargate (0.25 vCPU, 1 GB) | ~$9 |
+| ADOT collector (Fargate 0.25 vCPU, 0.5 GB) | ~$8 |
 | RDS db.t4g.micro | ~$12 |
 | Application Load Balancer | ~$16 |
 | ACM certificate | Free |
-| **Total** | **~$37** |
+| **Total** | **~$45** |
+
+The ADOT collector is a second, always-on Fargate task. If you don't want per-user usage telemetry, remove both the collector service and the `telemetry:` block (see "Telemetry" under "How traffic flows") rather than leaving it running idle.
 
 No license or per-seat fee from Anthropic. Amazon Bedrock inference costs are separate and the same as calling Amazon Bedrock directly without the gateway.
